@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/playwright:v1.51.1-noble
+FROM mcr.microsoft.com/playwright:v1.62.1-noble
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev
