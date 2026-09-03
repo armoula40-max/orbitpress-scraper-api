@@ -14,6 +14,15 @@ curl http://127.0.0.1:8080/health
 
 ## API
 
+إذا أعاد Playwright مصفوفة منشورات فارغة بسبب تحميل Facebook عبر تطبيق الهاتف أو حجب العناصر، يمكن تفعيل مسار Apify الاحتياطي من ملف `.env` على VPS فقط:
+
+```env
+APIFY_API_TOKEN=your-token
+APIFY_FACEBOOK_ACTOR=apify/facebook-posts-scraper
+```
+
+لا ترفع هذه القيم إلى GitHub. يستخدم الخادم Playwright أولاً، ثم Apify فقط إذا لم يجد منشورات.
+
 أرسل مفتاح المصادقة في `x-orbitpress-key`.
 
 ```bash

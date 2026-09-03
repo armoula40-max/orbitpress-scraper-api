@@ -59,12 +59,32 @@ async function pinterest(url, maxItems = 50) {
   });
 }
 
+async function apifyFacebook(url, maxPosts = 20) {
+  const token = process.env.APIFY_API_TOKEN?.trim();
+  if (!token) return null;
+  const actor = (process.env.APIFY_FACEBOOK_ACTOR || 'apify/facebook-posts-scraper').trim().replaceAll('/', '~');
+  const response = await fetch(`https://api.apify.com/v2/acts/${actor}/run-sync-get-dataset-items?token=${encodeURIComponent(token)}&format=json&clean=true`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ startUrls: [{ url }], resultsLimit: maxPosts })
+  });
+  if (!response.ok) throw new Error(`Apify returned HTTP ${response.status}`);
+  const items = await response.json();
+  return { source: url, provider: 'apify', posts: Array.isArray(items) ? items.slice(0, maxPosts) : [] };
+}
+
 app.get('/health', (_req, res) => res.json({ ok: true, service: 'orbitpress-scraper-api', activeJobs }));
 app.post('/api/facebook/scrape', auth, async (req, res) => {
   const { url, maxPosts = 20 } = req.body || {};
   if (!validHttpUrl(url) || !/facebook\.com$/i.test(new URL(url).hostname.replace(/^www\./, '')) && !/\.facebook\.com$/i.test(new URL(url).hostname)) return res.status(400).json({ error: 'Use an HTTPS Facebook Page or public Post URL.' });
   if (!guardJob(res)) return;
-  try { res.json(await facebook(url, Math.min(100, Math.max(1, Number(maxPosts))))); } catch (e) { res.status(502).json({ error: 'Facebook extraction failed', detail: e.message }); } finally { activeJobs--; }
+  try {
+    const limit = Math.min(100, Math.max(1, Number(maxPosts)));
+    const local = await facebook(url, limit);
+    if (local.posts.length) return res.json({ ...local, provider: 'playwright' });
+    const fallback = await apifyFacebook(url, limit);
+    if (fallback) return res.json(fallback);
+    return res.json({ ...local, provider: 'playwright', warning: 'Facebook returned no accessible public article elements. Set APIFY_API_TOKEN for the fallback scraper.' });
+  } catch (e) { res.status(502).json({ error: 'Facebook extraction failed', detail: e.message }); } finally { activeJobs--; }
 });
 app.post('/api/pinterest/scrape', auth, async (req, res) => {
   const { url, maxItems = 50 } = req.body || {};
