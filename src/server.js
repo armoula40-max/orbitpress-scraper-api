@@ -47,18 +47,20 @@ async function facebook(url, maxPosts = 20) {
 
 async function pinterest(url, maxItems = 50) {
   return withBrowser(async browser => {
-    const page = await browser.newPage({ viewport: { width: 1365, height: 900 } });
+    const page = await browser.newPage({ viewport: { width: 1365, height: 900 }, locale: 'en-US' });
+    await page.setExtraHTTPHeaders({ 'accept-language': 'en-US,en;q=0.9' });
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+    await page.waitForTimeout(5000);
     const pins = new Map();
     for (let i = 0; i < 10 && pins.size < maxItems; i++) {
-      const rows = await page.locator('a[href*="/pin/"]').evaluateAll(els => els.map(a => ({
-        url: a.href, title: a.getAttribute('aria-label') || a.innerText || '', image: a.querySelector('img')?.src || ''
+      const rows = await page.locator('a[href*="/pin/"], a[href*="/pin\\/"]').evaluateAll(els => els.map(a => ({
+        url: a.href, title: a.getAttribute('aria-label') || a.innerText || a.querySelector('img')?.alt || '', image: a.querySelector('img')?.src || ''
       })));
       rows.forEach(row => { if (row.url) pins.set(row.url, row); });
       await page.mouse.wheel(0, 1800);
-      await page.waitForTimeout(1000);
+      await page.waitForTimeout(1500);
     }
-    return { source: url, pins: [...pins.values()].slice(0, maxItems) };
+    return { source: url, finalUrl: page.url(), title: await page.title(), pins: [...pins.values()].slice(0, maxItems) };
   });
 }
 
