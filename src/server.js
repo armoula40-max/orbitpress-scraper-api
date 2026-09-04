@@ -45,6 +45,46 @@ async function facebook(url, maxPosts = 20) {
   });
 }
 
+async function pinterestInitialPins(page) {
+  const raw = await page.locator('script#__PWS_INITIAL_PROPS__').textContent().catch(() => null);
+  if (!raw) return [];
+  try {
+    const state = JSON.parse(raw).initialReduxState || {};
+    const resources = state.resources?.UserPinsResource || {};
+    const resourcePins = Object.values(resources).flatMap(resource => Array.isArray(resource?.data) ? resource.data : []);
+    const pins = resourcePins.length ? resourcePins : Object.values(state.pins || {});
+    return pins.map(pin => {
+      const id = String(pin.id || pin.pin_id || '').trim();
+      const image = pin.images?.orig?.url || pin.images?.['736x']?.url || pin.images?.['474x']?.url || '';
+      return id ? { id, url: `https://www.pinterest.com/pin/${id}/`, title: '', description: '', image } : null;
+    }).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+async function enrichPinterestPins(browser, pins, maxEnrich = 10) {
+  const detail = await browser.newPage({ viewport: { width: 1365, height: 900 }, locale: 'en-US' });
+  try {
+    for (const pin of pins.slice(0, maxEnrich)) {
+      try {
+        await detail.goto(pin.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        const title = await detail.locator('meta[property="og:title"]').getAttribute('content').catch(() => null);
+        const description = await detail.locator('meta[property="og:description"]').getAttribute('content').catch(() => null);
+        const image = await detail.locator('meta[property="og:image"]').getAttribute('content').catch(() => null);
+        if (title) pin.title = title.trim();
+        if (description) pin.description = description.trim();
+        if (image) pin.image = image.trim();
+      } catch {
+        // Keep the pin discovered from the profile JSON when detail enrichment is blocked.
+      }
+    }
+  } finally {
+    await detail.close();
+  }
+  return pins;
+}
+
 async function pinterest(url, maxItems = 50) {
   return withBrowser(async browser => {
     const page = await browser.newPage({ viewport: { width: 1365, height: 900 }, locale: 'en-US' });
@@ -52,15 +92,24 @@ async function pinterest(url, maxItems = 50) {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
     await page.waitForTimeout(5000);
     const pins = new Map();
+    const initialPins = await pinterestInitialPins(page);
+    initialPins.forEach(pin => pins.set(pin.url, pin));
     for (let i = 0; i < 10 && pins.size < maxItems; i++) {
       const rows = await page.locator('a[href*="/pin/"], a[href*="/pin\\/"]').evaluateAll(els => els.map(a => ({
         url: a.href, title: a.getAttribute('aria-label') || a.innerText || a.querySelector('img')?.alt || '', image: a.querySelector('img')?.src || ''
       })));
-      rows.forEach(row => { if (row.url) pins.set(row.url, row); });
+      rows.forEach(row => {
+        if (!row.url) return;
+        const existing = pins.get(row.url) || {};
+        pins.set(row.url, { ...existing, ...row });
+      });
+      if (pins.size >= maxItems) break;
       await page.mouse.wheel(0, 1800);
       await page.waitForTimeout(1500);
     }
-    return { source: url, finalUrl: page.url(), title: await page.title(), pins: [...pins.values()].slice(0, maxItems) };
+    const results = [...pins.values()].slice(0, maxItems);
+    await enrichPinterestPins(browser, results, Math.min(10, maxItems));
+    return { source: url, finalUrl: page.url(), title: await page.title(), pins: results, diagnostics: { initialPins: initialPins.length, discoveredPins: pins.size, enrichedPins: Math.min(10, results.length) } };
   });
 }
 
