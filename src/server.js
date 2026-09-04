@@ -67,13 +67,13 @@ app.post('/api/facebook/scrape', auth, async (req, res) => {
   try {
     const limit = Math.min(100, Math.max(1, Number(maxPosts)));
     const local = await facebook(url, limit);
-    return res.json({ ...local, provider: 'playwright', warning: local.posts.length ? undefined : 'Facebook returned no accessible public article elements. The endpoint uses only your VPS Playwright browser and does not use an external scraper.' });
+    return res.json({ ok: true, ...local, provider: 'playwright', warning: local.posts.length ? undefined : 'Facebook returned no accessible public article elements. The endpoint uses only your VPS Playwright browser and does not use an external scraper.' });
   } catch (e) { res.status(502).json({ error: 'Facebook extraction failed', detail: e.message }); } finally { activeJobs--; }
 });
 app.post('/api/pinterest/scrape', auth, async (req, res) => {
   const { url, maxItems = 50 } = req.body || {};
   if (!validHttpUrl(url) || !/pinterest\.com$/i.test(new URL(url).hostname.replace(/^www\./, '')) && !/\.pinterest\.com$/i.test(new URL(url).hostname)) return res.status(400).json({ error: 'Use an HTTPS Pinterest Board, Profile, or Pin URL.' });
   if (!guardJob(res)) return;
-  try { res.json(await pinterest(url, Math.min(200, Math.max(1, Number(maxItems))))); } catch (e) { res.status(502).json({ error: 'Pinterest extraction failed', detail: e.message }); } finally { activeJobs--; }
+  try { res.json({ ok: true, ...(await pinterest(url, Math.min(200, Math.max(1, Number(maxItems))))) }); } catch (e) { res.status(502).json({ error: 'Pinterest extraction failed', detail: e.message }); } finally { activeJobs--; }
 });
 app.listen(port, '0.0.0.0', () => console.log(`OrbitPress Scraper API listening on ${port}`));
