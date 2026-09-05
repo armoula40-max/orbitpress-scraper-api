@@ -19,6 +19,10 @@ function auth(req, res, next) {
   if (!apiKey || req.get('x-orbitpress-key') !== apiKey) return res.status(401).json({ error: 'Unauthorized' });
   next();
 }
+function secureSessionTransport(req) {
+  const forwarded = String(req.get('x-forwarded-proto') || '').split(',')[0].trim().toLowerCase();
+  return req.secure || forwarded === 'https' || req.ip === '127.0.0.1' || req.ip === '::1';
+}
 function validHttpUrl(value) {
   try { const u = new URL(value); return u.protocol === 'https:'; } catch { return false; }
 }
@@ -144,6 +148,21 @@ app.get('/api/session/:platform/check', auth, async (req, res) => {
   if (!guardJob(res)) return;
   try { res.json({ ok: true, ...(await checkLoggedIn(req.params.platform)) }); }
   catch (e) { res.status(502).json({ error: 'Session check failed', detail: e.message }); } finally { activeJobs--; }
+});
+app.post('/api/session/:platform/import', auth, async (req, res) => {
+  const platform = req.params.platform;
+  if (!sessionPlatforms.has(platform)) return res.status(400).json({ error: 'Platform must be facebook or pinterest.' });
+  if (!secureSessionTransport(req)) return res.status(400).json({ error: 'Session transfer requires HTTPS. Do not send browser cookies over plain HTTP.' });
+  const cookies = Array.isArray(req.body?.cookies) ? req.body.cookies : [];
+  if (!cookies.length || cookies.length > 150) return res.status(400).json({ error: 'Provide a valid cookies array.' });
+  const domainMatch = platform === 'facebook' ? /(^|\.)facebook\.com$/i : /(^|\.)pinterest\.com$/i;
+  const safeCookies = cookies.filter(cookie => cookie && typeof cookie.name === 'string' && typeof cookie.value === 'string' && cookie.name.length <= 160 && cookie.value.length <= 10000 && domainMatch.test(String(cookie.domain || `${platform}.com`)))
+    .map(cookie => ({ name: cookie.name, value: cookie.value, domain: cookie.domain, path: typeof cookie.path === 'string' && cookie.path.startsWith('/') ? cookie.path : '/', expires: Number.isFinite(Number(cookie.expires)) ? Number(cookie.expires) : undefined, httpOnly: Boolean(cookie.httpOnly), secure: true, sameSite: ['Strict', 'Lax', 'None'].includes(cookie.sameSite) ? cookie.sameSite : 'Lax' }));
+  if (!safeCookies.length) return res.status(400).json({ error: 'No acceptable cookies were provided for this platform.' });
+  try {
+    await withBrowser(async context => { await context.clearCookies(); await context.addCookies(safeCookies); }, platform);
+    res.json({ ok: true, platform, imported: safeCookies.length, message: 'Session imported securely. Run the session check endpoint now.' });
+  } catch (e) { res.status(502).json({ error: 'Session import failed', detail: e.message }); }
 });
 
 app.post('/api/facebook/scrape', auth, async (req, res) => {
