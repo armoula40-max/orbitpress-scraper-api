@@ -78,16 +78,26 @@ async function facebook(url, maxPosts = 20) {
     const page = await browser.newPage({ viewport: { width: 1365, height: 900 }, locale: 'en-US' });
     await page.setExtraHTTPHeaders({ 'accept-language': 'en-US,en;q=0.9' });
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
-    await page.waitForTimeout(4000);
+    await page.waitForTimeout(6000);
     const posts = new Map();
-    for (let i = 0; i < 8 && posts.size < maxPosts; i++) {
+    let previousSize = 0;
+    let stagnantRounds = 0;
+    for (let i = 0; i < 20 && posts.size < maxPosts; i++) {
       let rows = await page.locator('[role="article"]').evaluateAll(els => els.map(el => ({
-        text: (el.innerText || '').trim(), html: el.innerHTML.slice(0, 2000)
+        text: (el.innerText || '').trim(),
+        id: el.getAttribute('data-ft') || el.getAttribute('data-pagelet') || el.querySelector('a[href*="/posts/"],a[href*="/permalink/"]')?.href || ''
       })));
       if (!rows.length) rows = await page.locator('[data-ad-preview="message"]').evaluateAll(els => els.map(el => ({ text: (el.closest('[role="article"]')?.innerText || el.innerText || '').trim() })));
-      rows.forEach(row => { if (row.text) posts.set(row.text.slice(0, 500), { text: row.text.slice(0, 5000) }); });
-      await page.mouse.wheel(0, 1800);
-      await page.waitForTimeout(1200);
+      rows.forEach(row => {
+        if (!row.text) return;
+        const key = row.id || row.text.slice(0, 500);
+        posts.set(key, { text: row.text.slice(0, 5000), ...(row.id ? { url: row.id } : {}) });
+      });
+      if (posts.size === previousSize) stagnantRounds += 1; else stagnantRounds = 0;
+      previousSize = posts.size;
+      if (stagnantRounds >= 4) break;
+      await page.mouse.wheel(0, 2200);
+      await page.waitForTimeout(1800);
     }
     return { source: url, posts: [...posts.values()].slice(0, maxPosts) };
   }, 'facebook');
