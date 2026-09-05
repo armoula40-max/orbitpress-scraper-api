@@ -81,7 +81,7 @@ async function addIncomingCookies(context, cookies, platform) {
   const domain = platform === 'facebook' ? '.facebook.com' : '.pinterest.com';
   const safe = cookies.filter(cookie => cookie && typeof cookie.name === 'string' && typeof cookie.value === 'string')
     .map(cookie => ({ name: cookie.name, value: cookie.value, domain, path: '/', secure: false, sameSite: 'Lax' }));
-  if (safe.length) { await context.clearCookies(); await context.addCookies(safe); }
+  if (safe.length) await context.addCookies(safe);
 }
 
 async function facebook(url, maxPosts = 20, cookies = []) {
@@ -111,7 +111,7 @@ async function facebook(url, maxPosts = 20, cookies = []) {
       await page.mouse.wheel(0, 2200);
       await page.waitForTimeout(1800);
     }
-    return { source: url, posts: [...posts.values()].slice(0, maxPosts) };
+    return { source: url, posts: [...posts.values()].slice(0, maxPosts), sessionCookieCount: cookies.length, finalUrl: page.url(), title: await page.title() };
   }, 'facebook');
 }
 
@@ -143,7 +143,7 @@ async function pinterest(url, maxItems = 50, cookies = []) {
       const data = meta.jsonLd || {};
       pins.set(meta.canonical || page.url(), { url: meta.canonical || page.url(), title: meta.title || data.name || '', description: meta.description || data.description || '', image: meta.image || data.image?.url || data.image || '' });
     }
-    return { source: url, finalUrl: page.url(), title: await page.title(), pins: [...pins.values()].slice(0, maxItems) };
+    return { source: url, finalUrl: page.url(), title: await page.title(), sessionCookieCount: cookies.length, pins: [...pins.values()].slice(0, maxItems) };
   }, 'pinterest');
 }
 
