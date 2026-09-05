@@ -1,13 +1,19 @@
 import 'dotenv/config';
 import express from 'express';
 import { chromium } from 'playwright';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 
 const app = express();
 app.use(express.json({ limit: '64kb' }));
 const port = Number(process.env.PORT || 8080);
 const apiKey = process.env.ORBITPRESS_API_KEY || '';
 const maxConcurrent = Number(process.env.MAX_CONCURRENT_JOBS || 2);
+const usePersistentSessions = process.env.USE_PERSISTENT_SESSIONS !== 'false';
+const sessionDir = process.env.SESSION_DIR || '/sessions';
+const sessionPlatforms = new Set(['facebook', 'pinterest']);
 let activeJobs = 0;
+const sessionLocks = new Map();
 
 function auth(req, res, next) {
   if (!apiKey || req.get('x-orbitpress-key') !== apiKey) return res.status(401).json({ error: 'Unauthorized' });
@@ -20,9 +26,46 @@ function guardJob(res) {
   if (activeJobs >= maxConcurrent) { res.status(429).json({ error: 'Too many scraper jobs. Try again shortly.' }); return false; }
   activeJobs += 1; return true;
 }
-async function withBrowser(fn) {
+async function withBrowser(fn, platform = 'shared') {
+  if (usePersistentSessions && sessionPlatforms.has(platform)) {
+    await fs.mkdir(sessionDir, { recursive: true });
+    const previous = sessionLocks.get(platform) || Promise.resolve();
+    let release;
+    const current = new Promise(resolve => { release = resolve; });
+    sessionLocks.set(platform, previous.then(() => current));
+    await previous;
+    const profileDir = path.join(sessionDir, platform);
+    const context = await chromium.launchPersistentContext(profileDir, {
+      headless: process.env.BROWSER_HEADLESS !== 'false',
+      viewport: { width: 1365, height: 900 },
+      locale: 'en-US',
+      args: ['--disable-blink-features=AutomationControlled']
+    });
+    try { return await fn(context); } finally { await context.close(); release(); }
+  }
   const browser = await chromium.launch({ headless: process.env.BROWSER_HEADLESS !== 'false' });
   try { return await fn(browser); } finally { await browser.close(); }
+}
+function sessionProfile(platform) { return path.join(sessionDir, platform); }
+async function sessionStatus(platform) {
+  if (!sessionPlatforms.has(platform)) throw new Error('Unsupported platform session.');
+  await fs.mkdir(sessionDir, { recursive: true });
+  const profile = sessionProfile(platform);
+  let entries = [];
+  try { entries = await fs.readdir(profile); } catch {}
+  return { platform, persistent: usePersistentSessions, profileExists: entries.length > 0, profileDir: profile };
+}
+async function checkLoggedIn(platform) {
+  return withBrowser(async context => {
+    const page = await context.newPage();
+    const home = platform === 'facebook' ? 'https://www.facebook.com/' : 'https://www.pinterest.com/';
+    await page.goto(home, { waitUntil: 'domcontentloaded', timeout: 45000 });
+    await page.waitForTimeout(2500);
+    const text = (await page.locator('body').innerText().catch(() => '')).toLowerCase();
+    const loginWords = platform === 'facebook' ? ['log in', 'create new account'] : ['log in', 'sign up'];
+    const loginVisible = loginWords.some(word => text.includes(word));
+    return { ...(await sessionStatus(platform)), checked: true, loggedIn: !loginVisible, finalUrl: page.url(), title: await page.title() };
+  }, platform);
 }
 
 async function facebook(url, maxPosts = 20) {
@@ -42,47 +85,7 @@ async function facebook(url, maxPosts = 20) {
       await page.waitForTimeout(1200);
     }
     return { source: url, posts: [...posts.values()].slice(0, maxPosts) };
-  });
-}
-
-async function pinterestInitialPins(page) {
-  const raw = await page.locator('script#__PWS_INITIAL_PROPS__').textContent().catch(() => null);
-  if (!raw) return [];
-  try {
-    const state = JSON.parse(raw).initialReduxState || {};
-    const resources = state.resources?.UserPinsResource || {};
-    const resourcePins = Object.values(resources).flatMap(resource => Array.isArray(resource?.data) ? resource.data : []);
-    const pins = resourcePins.length ? resourcePins : Object.values(state.pins || {});
-    return pins.map(pin => {
-      const id = String(pin.id || pin.pin_id || '').trim();
-      const image = pin.images?.orig?.url || pin.images?.['736x']?.url || pin.images?.['474x']?.url || '';
-      return id ? { id, url: `https://www.pinterest.com/pin/${id}/`, title: '', description: '', image } : null;
-    }).filter(Boolean);
-  } catch {
-    return [];
-  }
-}
-
-async function enrichPinterestPins(browser, pins, maxEnrich = 10) {
-  const detail = await browser.newPage({ viewport: { width: 1365, height: 900 }, locale: 'en-US' });
-  try {
-    for (const pin of pins.slice(0, maxEnrich)) {
-      try {
-        await detail.goto(pin.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        const title = await detail.locator('meta[property="og:title"]').getAttribute('content').catch(() => null);
-        const description = await detail.locator('meta[property="og:description"]').getAttribute('content').catch(() => null);
-        const image = await detail.locator('meta[property="og:image"]').getAttribute('content').catch(() => null);
-        if (title) pin.title = title.trim();
-        if (description) pin.description = description.trim();
-        if (image) pin.image = image.trim();
-      } catch {
-        // Keep the pin discovered from the profile JSON when detail enrichment is blocked.
-      }
-    }
-  } finally {
-    await detail.close();
-  }
-  return pins;
+  }, 'facebook');
 }
 
 async function pinterest(url, maxItems = 50) {
@@ -92,28 +95,42 @@ async function pinterest(url, maxItems = 50) {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
     await page.waitForTimeout(5000);
     const pins = new Map();
-    const initialPins = await pinterestInitialPins(page);
-    initialPins.forEach(pin => pins.set(pin.url, pin));
     for (let i = 0; i < 10 && pins.size < maxItems; i++) {
       const rows = await page.locator('a[href*="/pin/"], a[href*="/pin\\/"]').evaluateAll(els => els.map(a => ({
         url: a.href, title: a.getAttribute('aria-label') || a.innerText || a.querySelector('img')?.alt || '', image: a.querySelector('img')?.src || ''
       })));
-      rows.forEach(row => {
-        if (!row.url) return;
-        const existing = pins.get(row.url) || {};
-        pins.set(row.url, { ...existing, ...row });
-      });
-      if (pins.size >= maxItems) break;
+      rows.forEach(row => { if (row.url) pins.set(row.url, row); });
       await page.mouse.wheel(0, 1800);
       await page.waitForTimeout(1500);
     }
-    const results = [...pins.values()].slice(0, maxItems);
-    await enrichPinterestPins(browser, results, Math.min(10, maxItems));
-    return { source: url, finalUrl: page.url(), title: await page.title(), pins: results, diagnostics: { initialPins: initialPins.length, discoveredPins: pins.size, enrichedPins: Math.min(10, results.length) } };
-  });
+    if (!pins.size && /\/pin\//i.test(page.url())) {
+      const meta = await page.evaluate(() => {
+        const get = name => document.querySelector(`meta[property="${name}"],meta[name="${name}"]`)?.content || '';
+        let jsonLd = null;
+        for (const node of document.querySelectorAll('script[type="application/ld+json"]')) {
+          try { const value = JSON.parse(node.textContent || 'null'); if (value && typeof value === 'object') { jsonLd = value; break; } } catch {}
+        }
+        return { title: get('og:title') || document.title, description: get('og:description') || get('description'), image: get('og:image'), canonical: document.querySelector('link[rel="canonical"]')?.href || location.href, jsonLd };
+      });
+      const data = meta.jsonLd || {};
+      pins.set(meta.canonical || page.url(), { url: meta.canonical || page.url(), title: meta.title || data.name || '', description: meta.description || data.description || '', image: meta.image || data.image?.url || data.image || '' });
+    }
+    return { source: url, finalUrl: page.url(), title: await page.title(), pins: [...pins.values()].slice(0, maxItems) };
+  }, 'pinterest');
 }
 
-app.get('/health', (_req, res) => res.json({ ok: true, service: 'orbitpress-scraper-api', activeJobs }));
+app.get('/health', (_req, res) => res.json({ ok: true, service: 'orbitpress-scraper-api', activeJobs, persistentSessions: usePersistentSessions }));
+app.get('/api/session/status', auth, async (_req, res) => {
+  try { res.json({ ok: true, sessions: { facebook: await sessionStatus('facebook'), pinterest: await sessionStatus('pinterest') } }); }
+  catch (e) { res.status(500).json({ error: 'Session status failed', detail: e.message }); }
+});
+app.get('/api/session/:platform/check', auth, async (req, res) => {
+  if (!sessionPlatforms.has(req.params.platform)) return res.status(400).json({ error: 'Platform must be facebook or pinterest.' });
+  if (!guardJob(res)) return;
+  try { res.json({ ok: true, ...(await checkLoggedIn(req.params.platform)) }); }
+  catch (e) { res.status(502).json({ error: 'Session check failed', detail: e.message }); } finally { activeJobs--; }
+});
+
 app.post('/api/facebook/scrape', auth, async (req, res) => {
   const { url, maxPosts = 20 } = req.body || {};
   if (!validHttpUrl(url) || !/facebook\.com$/i.test(new URL(url).hostname.replace(/^www\./, '')) && !/\.facebook\.com$/i.test(new URL(url).hostname)) return res.status(400).json({ error: 'Use an HTTPS Facebook Page or public Post URL.' });
