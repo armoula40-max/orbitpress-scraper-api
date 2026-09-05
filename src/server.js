@@ -61,10 +61,15 @@ async function checkLoggedIn(platform) {
     const home = platform === 'facebook' ? 'https://www.facebook.com/' : 'https://www.pinterest.com/';
     await page.goto(home, { waitUntil: 'domcontentloaded', timeout: 45000 });
     await page.waitForTimeout(2500);
-    const text = (await page.locator('body').innerText().catch(() => '')).toLowerCase();
-    const loginWords = platform === 'facebook' ? ['log in', 'create new account'] : ['log in', 'sign up'];
-    const loginVisible = loginWords.some(word => text.includes(word));
-    return { ...(await sessionStatus(platform)), checked: true, loggedIn: !loginVisible, finalUrl: page.url(), title: await page.title() };
+    const cookies = await context.cookies();
+    const cookieNames = new Set(cookies.map(cookie => cookie.name));
+    const cookieLoggedIn = platform === 'facebook'
+      ? cookieNames.has('c_user') && cookieNames.has('xs')
+      : cookieNames.has('_pinterest_sess') || cookieNames.has('pinterest_sess');
+    const loginForm = await page.locator('input[name="email"], input[name="password"], input[type="password"]').count().catch(() => 0);
+    const redirectedToLogin = /\/(login|auth)\b/i.test(new URL(page.url()).pathname);
+    const loggedIn = cookieLoggedIn && !redirectedToLogin && loginForm === 0;
+    return { ...(await sessionStatus(platform)), checked: true, loggedIn, cookieNames: [...cookieNames].filter(name => /c_user|xs|pinterest_sess/i.test(name)), finalUrl: page.url(), title: await page.title() };
   }, platform);
 }
 
