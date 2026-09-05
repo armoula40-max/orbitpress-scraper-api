@@ -76,9 +76,17 @@ async function checkLoggedIn(platform) {
     return { ...(await sessionStatus(platform)), checked: true, loggedIn, cookieNames: [...cookieNames].filter(name => /c_user|xs|pinterest_sess/i.test(name)), finalUrl: page.url(), title: await page.title() };
   }, platform);
 }
+async function addIncomingCookies(context, cookies, platform) {
+  if (!Array.isArray(cookies) || !cookies.length) return;
+  const domain = platform === 'facebook' ? '.facebook.com' : '.pinterest.com';
+  const safe = cookies.filter(cookie => cookie && typeof cookie.name === 'string' && typeof cookie.value === 'string')
+    .map(cookie => ({ name: cookie.name, value: cookie.value, domain, path: '/', secure: false, sameSite: 'Lax' }));
+  if (safe.length) { await context.clearCookies(); await context.addCookies(safe); }
+}
 
-async function facebook(url, maxPosts = 20) {
+async function facebook(url, maxPosts = 20, cookies = []) {
   return withBrowser(async browser => {
+    await addIncomingCookies(browser, cookies, 'facebook');
     const page = await browser.newPage({ viewport: { width: 1365, height: 900 }, locale: 'en-US' });
     await page.setExtraHTTPHeaders({ 'accept-language': 'en-US,en;q=0.9' });
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
@@ -107,8 +115,9 @@ async function facebook(url, maxPosts = 20) {
   }, 'facebook');
 }
 
-async function pinterest(url, maxItems = 50) {
+async function pinterest(url, maxItems = 50, cookies = []) {
   return withBrowser(async browser => {
+    await addIncomingCookies(browser, cookies, 'pinterest');
     const page = await browser.newPage({ viewport: { width: 1365, height: 900 }, locale: 'en-US' });
     await page.setExtraHTTPHeaders({ 'accept-language': 'en-US,en;q=0.9' });
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
@@ -166,19 +175,19 @@ app.post('/api/session/:platform/import', auth, async (req, res) => {
 });
 
 app.post('/api/facebook/scrape', auth, async (req, res) => {
-  const { url, maxPosts = 20 } = req.body || {};
+  const { url, maxPosts = 20, cookies = [] } = req.body || {};
   if (!validHttpUrl(url) || !/facebook\.com$/i.test(new URL(url).hostname.replace(/^www\./, '')) && !/\.facebook\.com$/i.test(new URL(url).hostname)) return res.status(400).json({ error: 'Use an HTTPS Facebook Page or public Post URL.' });
   if (!guardJob(res)) return;
   try {
     const limit = Math.min(100, Math.max(1, Number(maxPosts)));
-    const local = await facebook(url, limit);
+    const local = await facebook(url, limit, cookies);
     return res.json({ ok: true, ...local, provider: 'playwright', warning: local.posts.length ? undefined : 'Facebook returned no accessible public article elements. The endpoint uses only your VPS Playwright browser and does not use an external scraper.' });
   } catch (e) { res.status(502).json({ error: 'Facebook extraction failed', detail: e.message }); } finally { activeJobs--; }
 });
 app.post('/api/pinterest/scrape', auth, async (req, res) => {
-  const { url, maxItems = 50 } = req.body || {};
+  const { url, maxItems = 50, cookies = [] } = req.body || {};
   if (!validHttpUrl(url) || !/pinterest\.com$/i.test(new URL(url).hostname.replace(/^www\./, '')) && !/\.pinterest\.com$/i.test(new URL(url).hostname)) return res.status(400).json({ error: 'Use an HTTPS Pinterest Board, Profile, or Pin URL.' });
   if (!guardJob(res)) return;
-  try { res.json({ ok: true, ...(await pinterest(url, Math.min(200, Math.max(1, Number(maxItems))))) }); } catch (e) { res.status(502).json({ error: 'Pinterest extraction failed', detail: e.message }); } finally { activeJobs--; }
+  try { res.json({ ok: true, ...(await pinterest(url, Math.min(200, Math.max(1, Number(maxItems))), cookies)) }); } catch (e) { res.status(502).json({ error: 'Pinterest extraction failed', detail: e.message }); } finally { activeJobs--; }
 });
 app.listen(port, '0.0.0.0', () => console.log(`OrbitPress Scraper API listening on ${port}`));
