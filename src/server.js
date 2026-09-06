@@ -96,6 +96,20 @@ function isFacebookPostUrl(value) {
   } catch { return false; }
 }
 
+function facebookFeedUrl(value) {
+  try {
+    const parsed = new URL(value);
+    if (isFacebookPostUrl(value)) return value;
+    const cleanPath = parsed.pathname.replace(/\/+$/, '');
+    if (!cleanPath || /^\/[^/]+$/i.test(cleanPath)) {
+      parsed.pathname = `${cleanPath || ''}/posts/`;
+      parsed.search = '';
+      parsed.hash = '';
+    }
+    return parsed.toString();
+  } catch { return value; }
+}
+
 async function dismissFacebookLogin(page) {
   const closeSelectors = [
     '[role="dialog"] [aria-label="Close"]',
@@ -119,7 +133,8 @@ async function facebook(url, maxPosts = 20, cookies = []) {
     await addIncomingCookies(browser, cookies, 'facebook');
     const page = await browser.newPage({ viewport: { width: 1365, height: 900 }, locale: 'en-US' });
     await page.setExtraHTTPHeaders({ 'accept-language': 'en-US,en;q=0.9' });
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+    const targetUrl = facebookFeedUrl(url);
+    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
     await page.waitForTimeout(12000);
     await dismissFacebookLogin(page);
     const posts = new Map();
@@ -166,7 +181,7 @@ async function facebook(url, maxPosts = 20, cookies = []) {
     const bodyPreview = (await page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').trim().slice(0, 500);
     const articleSamples = await page.locator('[role="article"]').evaluateAll(els => els.slice(0, 5).map(el => ({ text: (el.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 300), hrefs: Array.from(el.querySelectorAll('a[href]')).map(a => a.href).filter(Boolean).slice(0, 20) }))).catch(() => []);
     const globalPostLinks = await page.locator('a[href*="/posts/"], a[href*="/reel/"], a[href*="/videos/"], a[href*="/permalink.php"], a[href*="/story.php"], a[href*="/photo.php"]').evaluateAll(els => els.map(a => a.href).filter(Boolean).slice(0, 30)).catch(() => []);
-    return { source: url, posts: [...posts.values()].slice(0, maxPosts), sessionCookieCount: cookies.length, persistentCookieNames: contextCookies.map(cookie => cookie.name).filter(name => /c_user|xs|checkpoint|fr/i.test(name)), articleCount, loginFormCount, bodyPreview, articleSamples, globalPostLinks, finalUrl: page.url(), title: await page.title(), extractionRule: 'original-post-links-with-metrics-and-dialog-dismissal' };
+    return { source: url, targetUrl, posts: [...posts.values()].slice(0, maxPosts), sessionCookieCount: cookies.length, persistentCookieNames: contextCookies.map(cookie => cookie.name).filter(name => /c_user|xs|checkpoint|fr/i.test(name)), articleCount, loginFormCount, bodyPreview, articleSamples, globalPostLinks, finalUrl: page.url(), title: await page.title(), extractionRule: 'posts-tab-with-metrics-and-dialog-dismissal' };
   }, 'facebook');
 }
 
