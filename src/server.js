@@ -119,7 +119,7 @@ async function facebook(url, maxPosts = 20, cookies = []) {
     const page = await browser.newPage({ viewport: { width: 1365, height: 900 }, locale: 'en-US' });
     await page.setExtraHTTPHeaders({ 'accept-language': 'en-US,en;q=0.9' });
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
-    await page.waitForTimeout(6000);
+    await page.waitForTimeout(12000);
     await dismissFacebookLogin(page);
     const posts = new Map();
     let previousSize = 0;
@@ -159,7 +159,11 @@ async function facebook(url, maxPosts = 20, cookies = []) {
       await page.waitForTimeout(1800);
       await dismissFacebookLogin(page);
     }
-    return { source: url, posts: [...posts.values()].slice(0, maxPosts), sessionCookieCount: cookies.length, finalUrl: page.url(), title: await page.title(), extractionRule: 'original-post-links-with-metrics-and-dialog-dismissal' };
+    const contextCookies = await browser.cookies('https://www.facebook.com/').catch(() => []);
+    const articleCount = await page.locator('[role="article"]').count().catch(() => 0);
+    const loginFormCount = await page.locator('input[name="email"], input[name="password"], input[type="password"]').count().catch(() => 0);
+    const bodyPreview = (await page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').trim().slice(0, 500);
+    return { source: url, posts: [...posts.values()].slice(0, maxPosts), sessionCookieCount: cookies.length, persistentCookieNames: contextCookies.map(cookie => cookie.name).filter(name => /c_user|xs|checkpoint|fr/i.test(name)), articleCount, loginFormCount, bodyPreview, finalUrl: page.url(), title: await page.title(), extractionRule: 'original-post-links-with-metrics-and-dialog-dismissal' };
   }, 'facebook');
 }
 
