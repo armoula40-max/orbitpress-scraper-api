@@ -204,6 +204,55 @@ async function facebook(url, maxPosts = 20, cookies = []) {
   }, 'facebook');
 }
 
+function apifyMetric(item, keys) {
+  for (const key of keys) {
+    const value = Number(item?.[key]);
+    if (Number.isFinite(value)) return value;
+  }
+  return 0;
+}
+
+function mapApifyPost(item) {
+  const likes = apifyMetric(item, ['likes', 'reactionLikeCount', 'likeCount']);
+  const reactions = apifyMetric(item, ['reactions', 'totalReactions', 'reactionCount']) || likes;
+  const comments = apifyMetric(item, ['comments', 'commentsCount', 'commentCount']);
+  const shares = apifyMetric(item, ['shares', 'sharesCount', 'shareCount']);
+  const url = item?.url || item?.topLevelUrl || item?.facebookUrl || '';
+  return {
+    kind: 'facebook_post',
+    isComment: false,
+    text: String(item?.text || item?.caption || '').slice(0, 5000),
+    url,
+    ...(item?.pageName || item?.user?.name ? { author: item.pageName || item.user.name } : {}),
+    ...(item?.time || item?.timestamp ? { publishedAt: item.time || new Date(Number(item.timestamp) * 1000).toISOString() } : {}),
+    comments,
+    reactions,
+    likes,
+    shares,
+    engagement: reactions + comments + shares
+  };
+}
+
+async function apifyFacebook(url, maxPosts = 20, options = {}) {
+  const token = process.env.APIFY_API_TOKEN || '';
+  if (!token) throw new Error('APIFY_API_TOKEN is not configured on the VPS.');
+  const input = {
+    startUrls: [{ url }],
+    resultsLimit: maxPosts,
+    ...(options.onlyPostsNewerThan ? { onlyPostsNewerThan: String(options.onlyPostsNewerThan) } : {}),
+    ...(options.onlyPostsOlderThan ? { onlyPostsOlderThan: String(options.onlyPostsOlderThan) } : {})
+  };
+  const endpoint = `https://api.apify.com/v2/acts/apify~facebook-posts-scraper/run-sync-get-dataset-items?token=${encodeURIComponent(token)}`;
+  const response = await fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify(input) });
+  const bodyText = await response.text();
+  if (!response.ok) throw new Error(`Apify request failed (${response.status}): ${bodyText.slice(0, 500)}`);
+  let items;
+  try { items = JSON.parse(bodyText); } catch { throw new Error('Apify returned invalid JSON.'); }
+  const posts = (Array.isArray(items) ? items : []).map(mapApifyPost).filter(item => item.url || item.text);
+  if (String(options.sort || 'engagement').toLowerCase() === 'engagement') posts.sort((a, b) => b.engagement - a.engagement);
+  return { source: url, posts: posts.slice(0, maxPosts), provider: 'apify', actor: 'apify/facebook-posts-scraper', apifyCount: posts.length, filters: { onlyPostsNewerThan: options.onlyPostsNewerThan || null, onlyPostsOlderThan: options.onlyPostsOlderThan || null, sort: options.sort || 'engagement' } };
+}
+
 async function pinterest(url, maxItems = 50, cookies = []) {
   return withBrowser(async browser => {
     await addIncomingCookies(browser, cookies, 'pinterest');
@@ -264,11 +313,14 @@ app.post('/api/session/:platform/import', auth, async (req, res) => {
 });
 
 app.post('/api/facebook/scrape', auth, async (req, res) => {
-  const { url, maxPosts = 20, cookies = [] } = req.body || {};
+  const { url, maxPosts = 20, cookies = [], provider = 'playwright', onlyPostsNewerThan, onlyPostsOlderThan, sort = 'engagement' } = req.body || {};
   if (!validHttpUrl(url) || !/facebook\.com$/i.test(new URL(url).hostname.replace(/^www\./, '')) && !/\.facebook\.com$/i.test(new URL(url).hostname)) return res.status(400).json({ error: 'Use an HTTPS Facebook Page or public Post URL.' });
   if (!guardJob(res)) return;
   try {
     const limit = Math.min(100, Math.max(1, Number(maxPosts)));
+    if (String(provider).toLowerCase() === 'apify') {
+      return res.json({ ok: true, ...(await apifyFacebook(url, limit, { onlyPostsNewerThan, onlyPostsOlderThan, sort })) });
+    }
     const local = await facebook(url, limit, cookies);
     return res.json({ ok: true, ...local, provider: 'playwright', warning: local.posts.length ? undefined : 'Facebook returned no accessible public article elements. The endpoint uses only your VPS Playwright browser and does not use an external scraper.' });
   } catch (e) { res.status(502).json({ error: 'Facebook extraction failed', detail: e.message }); } finally { activeJobs--; }
