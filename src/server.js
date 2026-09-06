@@ -110,6 +110,16 @@ function facebookFeedUrl(value) {
   } catch { return value; }
 }
 
+async function openFacebookPostsTab(page) {
+  const tabs = page.getByRole('tab', { name: /^Posts$/i }).first();
+  if (await tabs.count().catch(() => 0)) {
+    await tabs.click({ force: true, timeout: 3000 }).catch(() => {});
+    await page.waitForTimeout(8000);
+    return true;
+  }
+  return false;
+}
+
 async function dismissFacebookLogin(page) {
   const closeSelectors = [
     '[role="dialog"] [aria-label="Close"]',
@@ -137,6 +147,8 @@ async function facebook(url, maxPosts = 20, cookies = []) {
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
     await page.waitForTimeout(12000);
     await dismissFacebookLogin(page);
+    const postsTabClicked = await openFacebookPostsTab(page);
+    if (postsTabClicked) await dismissFacebookLogin(page);
     const posts = new Map();
     let previousSize = 0;
     let stagnantRounds = 0;
@@ -181,7 +193,7 @@ async function facebook(url, maxPosts = 20, cookies = []) {
     const bodyPreview = (await page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').trim().slice(0, 500);
     const articleSamples = await page.locator('[role="article"]').evaluateAll(els => els.slice(0, 5).map(el => ({ text: (el.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 300), hrefs: Array.from(el.querySelectorAll('a[href]')).map(a => a.href).filter(Boolean).slice(0, 20) }))).catch(() => []);
     const globalPostLinks = await page.locator('a[href*="/posts/"], a[href*="/reel/"], a[href*="/videos/"], a[href*="/permalink.php"], a[href*="/story.php"], a[href*="/photo.php"]').evaluateAll(els => els.map(a => a.href).filter(Boolean).slice(0, 30)).catch(() => []);
-    return { source: url, targetUrl, posts: [...posts.values()].slice(0, maxPosts), sessionCookieCount: cookies.length, persistentCookieNames: contextCookies.map(cookie => cookie.name).filter(name => /c_user|xs|checkpoint|fr/i.test(name)), articleCount, loginFormCount, bodyPreview, articleSamples, globalPostLinks, finalUrl: page.url(), title: await page.title(), extractionRule: 'posts-tab-with-metrics-and-dialog-dismissal' };
+    return { source: url, targetUrl, postsTabClicked, posts: [...posts.values()].slice(0, maxPosts), sessionCookieCount: cookies.length, persistentCookieNames: contextCookies.map(cookie => cookie.name).filter(name => /c_user|xs|checkpoint|fr/i.test(name)), articleCount, loginFormCount, bodyPreview, articleSamples, globalPostLinks, finalUrl: page.url(), title: await page.title(), extractionRule: 'posts-tab-with-metrics-and-dialog-dismissal' };
   }, 'facebook');
 }
 
