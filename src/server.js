@@ -48,7 +48,8 @@ async function withBrowser(fn, platform = 'shared') {
     try { return await fn(context); } finally { await context.close(); release(); }
   }
   const browser = await chromium.launch({ headless: process.env.BROWSER_HEADLESS !== 'false' });
-  try { return await fn(browser); } finally { await browser.close(); }
+  const context = await browser.newContext({ viewport: { width: 1365, height: 900 }, locale: 'en-US' });
+  try { return await fn(context); } finally { await context.close(); await browser.close(); }
 }
 function sessionProfile(platform) { return path.join(sessionDir, platform); }
 async function sessionStatus(platform) {
