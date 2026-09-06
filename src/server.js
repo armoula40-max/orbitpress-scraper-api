@@ -163,7 +163,9 @@ async function facebook(url, maxPosts = 20, cookies = []) {
     const articleCount = await page.locator('[role="article"]').count().catch(() => 0);
     const loginFormCount = await page.locator('input[name="email"], input[name="password"], input[type="password"]').count().catch(() => 0);
     const bodyPreview = (await page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').trim().slice(0, 500);
-    return { source: url, posts: [...posts.values()].slice(0, maxPosts), sessionCookieCount: cookies.length, persistentCookieNames: contextCookies.map(cookie => cookie.name).filter(name => /c_user|xs|checkpoint|fr/i.test(name)), articleCount, loginFormCount, bodyPreview, finalUrl: page.url(), title: await page.title(), extractionRule: 'original-post-links-with-metrics-and-dialog-dismissal' };
+    const articleSamples = await page.locator('[role="article"]').evaluateAll(els => els.slice(0, 5).map(el => ({ text: (el.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 300), hrefs: Array.from(el.querySelectorAll('a[href]')).map(a => a.href).filter(Boolean).slice(0, 20) }))).catch(() => []);
+    const globalPostLinks = await page.locator('a[href*="/posts/"], a[href*="/reel/"], a[href*="/videos/"], a[href*="/permalink.php"], a[href*="/story.php"], a[href*="/photo.php"]').evaluateAll(els => els.map(a => a.href).filter(Boolean).slice(0, 30)).catch(() => []);
+    return { source: url, posts: [...posts.values()].slice(0, maxPosts), sessionCookieCount: cookies.length, persistentCookieNames: contextCookies.map(cookie => cookie.name).filter(name => /c_user|xs|checkpoint|fr/i.test(name)), articleCount, loginFormCount, bodyPreview, articleSamples, globalPostLinks, finalUrl: page.url(), title: await page.title(), extractionRule: 'original-post-links-with-metrics-and-dialog-dismissal' };
   }, 'facebook');
 }
 
