@@ -1,0 +1,11 @@
+FROM mcr.microsoft.com/playwright:v1.62.1-noble
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends xvfb fluxbox x11vnc novnc websockify \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY visual-browser-entrypoint.sh /usr/local/bin/visual-browser-entrypoint.sh
+RUN chmod +x /usr/local/bin/visual-browser-entrypoint.sh
+
+USER pwuser
+ENTRYPOINT ["/usr/local/bin/visual-browser-entrypoint.sh"]

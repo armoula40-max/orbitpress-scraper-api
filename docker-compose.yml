@@ -9,3 +9,15 @@ services:
     volumes:
       - ./sessions:/sessions
     init: true
+
+  browser-login:
+    build:
+      context: .
+      dockerfile: Dockerfile.visual
+    profiles: ["login"]
+    shm_size: "2gb"
+    ports:
+      - "127.0.0.1:6080:6080"
+    volumes:
+      - ./sessions:/sessions
+    init: true
