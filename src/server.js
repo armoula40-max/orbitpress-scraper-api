@@ -122,9 +122,9 @@ async function facebook(url, maxPosts = 20, cookies = []) {
         const labels = Array.from(el.querySelectorAll('[aria-label], [role="button"]')).map(node => clean(node.getAttribute('aria-label') || node.textContent));
         const findMetric = patterns => { for (const label of labels) if (patterns.some(pattern => pattern.test(label))) { const count = parseCount(label); if (count != null) return count; } return null; };
         const visibleReactions = text.match(/(?:all\s+)?reactions?\s*[:\s]+([\d,.]+\s*[KMB]?)/i)?.[1] || '';
-        const visibleComments = text.match(/([\d,.]+\s*[KMB]?)\s+(?:comments?|replies?)/i)?.[1] || '';
-        const comments = findMetric([/comment/i, /reply/i]) ?? parseCount(visibleComments);
-        const reactions = findMetric([/reaction/i, /like/i, /love/i, /haha/i, /wow/i, /sad/i, /angry/i]) ?? parseCount(visibleReactions);
+        const visibleComments = text.match(/(?:reactions?[^]*?)\b([\d,.]+\s*[KMB]?)\s+[\d,.]+\s*[KMB]?\s+Like\b/i)?.[1] || text.match(/([\d,.]+\s*[KMB]?)\s+(?:comments?|replies?)/i)?.[1] || '';
+        const comments = parseCount(visibleComments) ?? findMetric([/comment/i, /reply/i]);
+        const reactions = parseCount(visibleReactions) ?? findMetric([/reaction/i, /like/i, /love/i, /haha/i, /wow/i, /sad/i, /angry/i]);
         const author = clean(el.querySelector('h2 a, h3 a, strong a, [data-ad-rendering-role="profile_name"] a')?.textContent || '');
         return { text, url: postHref || '', author, publishedAt, comments, reactions, kind: postHref ? 'facebook_post' : 'unknown', isComment: false };
       }));
