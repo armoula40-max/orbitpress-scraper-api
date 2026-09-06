@@ -105,26 +105,38 @@ async function facebook(url, maxPosts = 20, cookies = []) {
     const posts = new Map();
     let previousSize = 0;
     let stagnantRounds = 0;
-    for (let i = 0; i < 20 && posts.size < maxPosts; i++) {
+    for (let i = 0; i < 30 && posts.size < maxPosts; i++) {
       const rows = await page.locator('[role="article"]').evaluateAll(els => els.map(el => {
         const clean = value => String(value || '').replace(/\s+/g, ' ').trim();
+        const parseCount = value => {
+          const match = clean(value).replace(/,/g, '').match(/(\d+(?:\.\d+)?)([KMB])?/i);
+          if (!match) return null;
+          const factor = { K: 1e3, M: 1e6, B: 1e9 }[String(match[2] || '').toUpperCase()] || 1;
+          return Math.round(Number(match[1]) * factor);
+        };
         const hrefs = Array.from(el.querySelectorAll('a[href]')).map(anchor => anchor.href).filter(Boolean);
-        const postHref = hrefs.find(href => /facebook\.com\//i.test(href) && !/[?&](comment_id|reply_comment_id|comment|reply)=/i.test(href) && /\/(?:[^/]+\/)?posts\/|\/permalink\.php|\/story\.php|\/photo\.php|\/videos?\/|\/reel\/|\/watch\/|\/share\/(?:p|v)\//i.test(href));
+        const postHref = hrefs.find(href => /facebook\.com\//i.test(href) && !/[?&](comment_id|reply_comment_id|comment|reply)=/i.test(href) && /\/(?:[^/]+\/)?posts\/|\/permalink\.php|\/story\.php|\/photo\.php|\/videos?(?:\/|$)|\/reel\/|\/watch\/|\/share\/(?:p|v)\//i.test(href));
+        const time = el.querySelector('time[datetime], abbr[data-utime]');
+        const publishedAt = time?.getAttribute('datetime') || time?.getAttribute('data-utime') || '';
+        const labels = Array.from(el.querySelectorAll('[aria-label], [role="button"]')).map(node => clean(node.getAttribute('aria-label') || node.textContent));
+        const findMetric = patterns => { for (const label of labels) if (patterns.some(pattern => pattern.test(label))) { const count = parseCount(label); if (count != null) return count; } return null; };
+        const comments = findMetric([/comment/i, /reply/i]);
+        const reactions = findMetric([/reaction/i, /like/i, /love/i, /haha/i, /wow/i, /sad/i, /angry/i]);
         const author = clean(el.querySelector('h2 a, h3 a, strong a, [data-ad-rendering-role="profile_name"] a')?.textContent || '');
         const text = clean(el.innerText || '');
-        return { text, url: postHref || '', author, kind: postHref ? 'facebook_post' : 'unknown', isComment: false };
+        return { text, url: postHref || '', author, publishedAt, comments, reactions, kind: postHref ? 'facebook_post' : 'unknown', isComment: false };
       }));
       rows.filter(row => row.text && row.url && isFacebookPostUrl(row.url)).forEach(row => {
         const key = row.url.split('#')[0];
-        posts.set(key, { kind: 'facebook_post', isComment: false, text: row.text.slice(0, 5000), url: key, ...(row.author ? { author: row.author } : {}) });
+        posts.set(key, { kind: 'facebook_post', isComment: false, text: row.text.slice(0, 5000), url: key, ...(row.author ? { author: row.author } : {}), ...(row.publishedAt ? { publishedAt: row.publishedAt } : {}), ...(row.comments != null ? { comments: row.comments } : {}), ...(row.reactions != null ? { reactions: row.reactions, likes: row.reactions } : {}) });
       });
       if (posts.size === previousSize) stagnantRounds += 1; else stagnantRounds = 0;
       previousSize = posts.size;
-      if (stagnantRounds >= 4) break;
+      if (stagnantRounds >= 6) break;
       await page.mouse.wheel(0, 2200);
       await page.waitForTimeout(1800);
     }
-    return { source: url, posts: [...posts.values()].slice(0, maxPosts), sessionCookieCount: cookies.length, finalUrl: page.url(), title: await page.title(), extractionRule: 'original-post-links-only' };
+    return { source: url, posts: [...posts.values()].slice(0, maxPosts), sessionCookieCount: cookies.length, finalUrl: page.url(), title: await page.title(), extractionRule: 'original-post-links-with-metrics' };
   }, 'facebook');
 }
 
