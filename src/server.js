@@ -116,14 +116,16 @@ async function facebook(url, maxPosts = 20, cookies = []) {
         };
         const hrefs = Array.from(el.querySelectorAll('a[href]')).map(anchor => anchor.href).filter(Boolean);
         const postHref = hrefs.find(href => /facebook\.com\//i.test(href) && !/[?&](comment_id|reply_comment_id|comment|reply)=/i.test(href) && /\/(?:[^/]+\/)?posts\/|\/permalink\.php|\/story\.php|\/photo\.php|\/videos?(?:\/|$)|\/reel\/|\/watch\/|\/share\/(?:p|v)\//i.test(href));
-        const time = el.querySelector('time[datetime], abbr[data-utime]');
-        const publishedAt = time?.getAttribute('datetime') || time?.getAttribute('data-utime') || '';
+        const time = el.querySelector('time[datetime], abbr[data-utime], a[aria-label*="ago" i], a[title]');
+        const text = clean(el.innerText || '');
+        const publishedAt = time?.getAttribute('datetime') || time?.getAttribute('data-utime') || time?.getAttribute('aria-label') || time?.getAttribute('title') || (text.match(/(?:^|\s)(\d+\s*(?:m|h|d|w|mo|y))\s*[·•]/i)?.[1] || '');
         const labels = Array.from(el.querySelectorAll('[aria-label], [role="button"]')).map(node => clean(node.getAttribute('aria-label') || node.textContent));
         const findMetric = patterns => { for (const label of labels) if (patterns.some(pattern => pattern.test(label))) { const count = parseCount(label); if (count != null) return count; } return null; };
-        const comments = findMetric([/comment/i, /reply/i]);
-        const reactions = findMetric([/reaction/i, /like/i, /love/i, /haha/i, /wow/i, /sad/i, /angry/i]);
+        const visibleReactions = text.match(/(?:all\s+)?reactions?\s*[:\s]+([\d,.]+\s*[KMB]?)/i)?.[1] || '';
+        const visibleComments = text.match(/([\d,.]+\s*[KMB]?)\s+(?:comments?|replies?)/i)?.[1] || '';
+        const comments = findMetric([/comment/i, /reply/i]) ?? parseCount(visibleComments);
+        const reactions = findMetric([/reaction/i, /like/i, /love/i, /haha/i, /wow/i, /sad/i, /angry/i]) ?? parseCount(visibleReactions);
         const author = clean(el.querySelector('h2 a, h3 a, strong a, [data-ad-rendering-role="profile_name"] a')?.textContent || '');
-        const text = clean(el.innerText || '');
         return { text, url: postHref || '', author, publishedAt, comments, reactions, kind: postHref ? 'facebook_post' : 'unknown', isComment: false };
       }));
       rows.filter(row => row.text && row.url && isFacebookPostUrl(row.url)).forEach(row => {
