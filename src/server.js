@@ -194,13 +194,46 @@ async function facebook(url, maxPosts = 20, cookies = []) {
       await page.waitForTimeout(1800);
       await dismissFacebookLogin(page);
     }
+    let mobileFallbackUsed = false;
+    if (!posts.size && !/^m\./i.test(new URL(page.url()).hostname)) {
+      const mobileUrl = new URL(targetUrl);
+      mobileUrl.hostname = 'm.facebook.com';
+      mobileFallbackUsed = true;
+      await page.goto(mobileUrl.toString(), { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
+      await page.waitForTimeout(7000);
+      await dismissFacebookLogin(page);
+      for (let i = 0; i < 12 && posts.size < maxPosts; i++) {
+        const mobileRows = await page.locator('a[href*="/posts/"], a[href*="/reel/"], a[href*="/videos/"], a[href*="/permalink.php"], a[href*="/story.php"], a[href*="/photo.php"]').evaluateAll(anchors => anchors.map(anchor => {
+          let node = anchor;
+          let text = '';
+          for (let depth = 0; depth < 10 && node; depth++, node = node.parentElement) {
+            const candidate = String(node.innerText || '').replace(/\s+/g, ' ').trim();
+            if (candidate.length >= 40 && candidate.length <= 6000) { text = candidate; break; }
+          }
+          return { url: anchor.href, text };
+        }));
+        for (const row of mobileRows) {
+          if (!row.text || !row.url || !isFacebookPostUrl(row.url)) continue;
+          const key = row.url.split('#')[0];
+          const visibleReactions = row.text.match(/(?:all\s+)?reactions?\s*[:\s]+([\d,.]+\s*[KMB]?)/i)?.[1] || '';
+          const visibleComments = row.text.match(/([\d,.]+\s*[KMB]?)\s+(?:comments?|replies?)/i)?.[1] || '';
+          const parseCount = value => { const match = String(value).replace(/,/g, '').match(/(\d+(?:\.\d+)?)([KMB])?/i); if (!match) return null; return Math.round(Number(match[1]) * ({ K: 1e3, M: 1e6, B: 1e9 }[String(match[2] || '').toUpperCase()] || 1)); };
+          const comments = parseCount(visibleComments);
+          const reactions = parseCount(visibleReactions);
+          posts.set(key, { kind: 'facebook_post', isComment: false, text: row.text.slice(0, 5000), url: key, ...(comments != null ? { comments } : {}), ...(reactions != null ? { reactions, likes: reactions } : {}) });
+          if (posts.size >= maxPosts) break;
+        }
+        await page.mouse.wheel(0, 2200).catch(() => {});
+        await page.waitForTimeout(1800);
+      }
+    }
     const contextCookies = await browser.cookies('https://www.facebook.com/').catch(() => []);
     const articleCount = await page.locator('[role="article"]').count().catch(() => 0);
     const loginFormCount = await page.locator('input[name="email"], input[name="password"], input[type="password"]').count().catch(() => 0);
     const bodyPreview = (await page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').trim().slice(0, 500);
     const articleSamples = await page.locator('[role="article"]').evaluateAll(els => els.slice(0, 5).map(el => ({ text: (el.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 300), hrefs: Array.from(el.querySelectorAll('a[href]')).map(a => a.href).filter(Boolean).slice(0, 20) }))).catch(() => []);
     const globalPostLinks = await page.locator('a[href*="/posts/"], a[href*="/reel/"], a[href*="/videos/"], a[href*="/permalink.php"], a[href*="/story.php"], a[href*="/photo.php"]').evaluateAll(els => els.map(a => a.href).filter(Boolean).slice(0, 30)).catch(() => []);
-    return { source: url, targetUrl, postsTabClicked, posts: [...posts.values()].slice(0, maxPosts), sessionCookieCount: cookies.length, persistentCookieNames: contextCookies.map(cookie => cookie.name).filter(name => /c_user|xs|checkpoint|fr/i.test(name)), articleCount, loginFormCount, bodyPreview, articleSamples, globalPostLinks, networkSamples, finalUrl: page.url(), title: await page.title(), extractionRule: 'posts-tab-with-metrics-and-dialog-dismissal' };
+    return { source: url, targetUrl, postsTabClicked, posts: [...posts.values()].slice(0, maxPosts), sessionCookieCount: cookies.length, persistentCookieNames: contextCookies.map(cookie => cookie.name).filter(name => /c_user|xs|checkpoint|fr/i.test(name)), articleCount, loginFormCount, bodyPreview, articleSamples, globalPostLinks, networkSamples, mobileFallbackUsed, finalUrl: page.url(), title: await page.title(), extractionRule: mobileFallbackUsed ? 'posts-tab-with-metrics-mobile-fallback' : 'posts-tab-with-metrics-and-dialog-dismissal' };
   }, 'facebook');
 }
 
