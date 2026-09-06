@@ -95,6 +95,24 @@ function isFacebookPostUrl(value) {
   } catch { return false; }
 }
 
+async function dismissFacebookLogin(page) {
+  const closeSelectors = [
+    '[role="dialog"] [aria-label="Close"]',
+    '[role="dialog"] [aria-label*="close" i]',
+    '[role="dialog"] [role="button"][data-tooltip-content*="Close" i]'
+  ];
+  for (const selector of closeSelectors) {
+    const button = page.locator(selector).first();
+    if (await button.count().catch(() => 0)) {
+      await button.click({ force: true, timeout: 1500 }).catch(() => {});
+      await page.waitForTimeout(400);
+      return true;
+    }
+  }
+  await page.keyboard.press('Escape').catch(() => {});
+  return false;
+}
+
 async function facebook(url, maxPosts = 20, cookies = []) {
   return withBrowser(async browser => {
     await addIncomingCookies(browser, cookies, 'facebook');
@@ -102,10 +120,12 @@ async function facebook(url, maxPosts = 20, cookies = []) {
     await page.setExtraHTTPHeaders({ 'accept-language': 'en-US,en;q=0.9' });
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
     await page.waitForTimeout(6000);
+    await dismissFacebookLogin(page);
     const posts = new Map();
     let previousSize = 0;
     let stagnantRounds = 0;
     for (let i = 0; i < 30 && posts.size < maxPosts; i++) {
+      await dismissFacebookLogin(page);
       const rows = await page.locator('[role="article"]').evaluateAll(els => els.map(el => {
         const clean = value => String(value || '').replace(/\s+/g, ' ').trim();
         const parseCount = value => {
@@ -137,8 +157,9 @@ async function facebook(url, maxPosts = 20, cookies = []) {
       if (stagnantRounds >= 6) break;
       await page.mouse.wheel(0, 2200);
       await page.waitForTimeout(1800);
+      await dismissFacebookLogin(page);
     }
-    return { source: url, posts: [...posts.values()].slice(0, maxPosts), sessionCookieCount: cookies.length, finalUrl: page.url(), title: await page.title(), extractionRule: 'original-post-links-with-metrics' };
+    return { source: url, posts: [...posts.values()].slice(0, maxPosts), sessionCookieCount: cookies.length, finalUrl: page.url(), title: await page.title(), extractionRule: 'original-post-links-with-metrics-and-dialog-dismissal' };
   }, 'facebook');
 }
 
