@@ -1,8 +1,9 @@
 {
   "name": "orbitpress-scraper-api",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
+  "description": "Playwright-based Facebook/Pinterest scraping API for OrbitPress with pagination, rate limiting, and hardened sessions.",
   "scripts": { "start": "node src/server.js", "test": "node --test" },
   "dependencies": { "dotenv": "^16.4.7", "express": "^4.21.2", "playwright": "^1.51.1" }
 }

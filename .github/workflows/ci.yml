@@ -13,3 +13,5 @@ jobs:
           cache: npm
       - run: npm ci
       - run: node --check src/server.js
+      - run: node --check src/contracts.js
+      - run: npm test

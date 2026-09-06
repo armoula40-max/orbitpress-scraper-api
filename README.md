@@ -30,6 +30,19 @@ curl -X POST http://127.0.0.1:8080/api/pinterest/scrape \
   -d '{"url":"https://www.pinterest.com/example/board-name/","maxItems":20}'
 ```
 
+### الترقيم (Pagination)
+
+تقبل طلبات السحب حقلاً اختيارياً `offset` و/أو `cursor`، وترجع الاستجابة كتلة `pagination` فيها `hasMore` و`nextCursor`. أرسل `nextCursor` في الطلب التالي لجمع الصفحة التالية:
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/facebook/scrape \
+  -H 'content-type: application/json' \
+  -H 'x-orbitpress-key: YOUR_KEY' \
+  -d '{"url":"https://www.facebook.com/public-page","maxPosts":20,"cursor":"eyJvIjoyMH0"}'
+```
+
+تفاصيل التحديث الكاملة (أمان، مهلات، rate limiting، اختبارات) في `README_UPDATE_AR.md`.
+
 ## ملاحظات الإنتاج
 
 اربط الخدمة خلف Nginx/Caddy مع HTTPS، ولا تفتح المنفذ 8080 للعامة مباشرة. ضع المفتاح في `.env` على VPS فقط. HTML selectors في مواقع التواصل قابلة للتغيير؛ لذلك يجب مراقبة الخدمة وتحديثها عند تغيّر الموقع. استخدم المحتوى العام فقط واحترم شروط Facebook وPinterest والقوانين المحلية.
