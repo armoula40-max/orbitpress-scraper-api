@@ -84,6 +84,17 @@ async function addIncomingCookies(context, cookies, platform) {
   if (safe.length) await context.addCookies(safe);
 }
 
+function isFacebookPostUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return false;
+  try {
+    const parsed = new URL(raw);
+    if (!/(^|\.)facebook\.com$/i.test(parsed.hostname.replace(/^www\./i, '')) && !/\.facebook\.com$/i.test(parsed.hostname)) return false;
+    if (/[?&](comment_id|reply_comment_id|comment|reply)=/i.test(parsed.search)) return false;
+    return /\/(?:[^/]+\/)?posts\/|\/permalink\.php|\/story\.php|\/photo\.php|\/videos?\/|\/reel\/|\/watch\/|\/share\/(?:p|v)\//i.test(parsed.pathname) || /(?:story_fbid|photo_id)=/i.test(parsed.search);
+  } catch { return false; }
+}
+
 async function facebook(url, maxPosts = 20, cookies = []) {
   return withBrowser(async browser => {
     await addIncomingCookies(browser, cookies, 'facebook');
@@ -95,15 +106,17 @@ async function facebook(url, maxPosts = 20, cookies = []) {
     let previousSize = 0;
     let stagnantRounds = 0;
     for (let i = 0; i < 20 && posts.size < maxPosts; i++) {
-      let rows = await page.locator('[role="article"]').evaluateAll(els => els.map(el => ({
-        text: (el.innerText || '').trim(),
-        id: el.getAttribute('data-ft') || el.getAttribute('data-pagelet') || el.querySelector('a[href*="/posts/"],a[href*="/permalink/"]')?.href || ''
-      })));
-      if (!rows.length) rows = await page.locator('[data-ad-preview="message"]').evaluateAll(els => els.map(el => ({ text: (el.closest('[role="article"]')?.innerText || el.innerText || '').trim() })));
-      rows.forEach(row => {
-        if (!row.text) return;
-        const key = row.id || row.text.slice(0, 500);
-        posts.set(key, { text: row.text.slice(0, 5000), ...(row.id ? { url: row.id } : {}) });
+      const rows = await page.locator('[role="article"]').evaluateAll(els => els.map(el => {
+        const clean = value => String(value || '').replace(/\s+/g, ' ').trim();
+        const hrefs = Array.from(el.querySelectorAll('a[href]')).map(anchor => anchor.href).filter(Boolean);
+        const postHref = hrefs.find(href => /facebook\.com\//i.test(href) && !/[?&](comment_id|reply_comment_id|comment|reply)=/i.test(href) && /\/(?:[^/]+\/)?posts\/|\/permalink\.php|\/story\.php|\/photo\.php|\/videos?\/|\/reel\/|\/watch\/|\/share\/(?:p|v)\//i.test(href));
+        const author = clean(el.querySelector('h2 a, h3 a, strong a, [data-ad-rendering-role="profile_name"] a')?.textContent || '');
+        const text = clean(el.innerText || '');
+        return { text, url: postHref || '', author, kind: postHref ? 'facebook_post' : 'unknown', isComment: false };
+      }));
+      rows.filter(row => row.text && row.url && isFacebookPostUrl(row.url)).forEach(row => {
+        const key = row.url.split('#')[0];
+        posts.set(key, { kind: 'facebook_post', isComment: false, text: row.text.slice(0, 5000), url: key, ...(row.author ? { author: row.author } : {}) });
       });
       if (posts.size === previousSize) stagnantRounds += 1; else stagnantRounds = 0;
       previousSize = posts.size;
@@ -111,7 +124,7 @@ async function facebook(url, maxPosts = 20, cookies = []) {
       await page.mouse.wheel(0, 2200);
       await page.waitForTimeout(1800);
     }
-    return { source: url, posts: [...posts.values()].slice(0, maxPosts), sessionCookieCount: cookies.length, finalUrl: page.url(), title: await page.title() };
+    return { source: url, posts: [...posts.values()].slice(0, maxPosts), sessionCookieCount: cookies.length, finalUrl: page.url(), title: await page.title(), extractionRule: 'original-post-links-only' };
   }, 'facebook');
 }
 
