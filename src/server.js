@@ -143,6 +143,13 @@ async function facebook(url, maxPosts = 20, cookies = []) {
     await addIncomingCookies(browser, cookies, 'facebook');
     const page = await browser.newPage({ viewport: { width: 1365, height: 900 }, locale: 'en-US' });
     await page.setExtraHTTPHeaders({ 'accept-language': 'en-US,en;q=0.9' });
+    const networkSamples = [];
+    page.on('response', response => {
+      const responseUrl = response.url();
+      if (/(graphql|ajax|feed|timeline|reel|video)/i.test(responseUrl) && networkSamples.length < 80) {
+        networkSamples.push({ url: responseUrl.slice(0, 500), status: response.status(), contentType: response.headers()['content-type'] || '' });
+      }
+    });
     const targetUrl = facebookFeedUrl(url);
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
     await page.waitForTimeout(12000);
@@ -193,7 +200,7 @@ async function facebook(url, maxPosts = 20, cookies = []) {
     const bodyPreview = (await page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').trim().slice(0, 500);
     const articleSamples = await page.locator('[role="article"]').evaluateAll(els => els.slice(0, 5).map(el => ({ text: (el.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 300), hrefs: Array.from(el.querySelectorAll('a[href]')).map(a => a.href).filter(Boolean).slice(0, 20) }))).catch(() => []);
     const globalPostLinks = await page.locator('a[href*="/posts/"], a[href*="/reel/"], a[href*="/videos/"], a[href*="/permalink.php"], a[href*="/story.php"], a[href*="/photo.php"]').evaluateAll(els => els.map(a => a.href).filter(Boolean).slice(0, 30)).catch(() => []);
-    return { source: url, targetUrl, postsTabClicked, posts: [...posts.values()].slice(0, maxPosts), sessionCookieCount: cookies.length, persistentCookieNames: contextCookies.map(cookie => cookie.name).filter(name => /c_user|xs|checkpoint|fr/i.test(name)), articleCount, loginFormCount, bodyPreview, articleSamples, globalPostLinks, finalUrl: page.url(), title: await page.title(), extractionRule: 'posts-tab-with-metrics-and-dialog-dismissal' };
+    return { source: url, targetUrl, postsTabClicked, posts: [...posts.values()].slice(0, maxPosts), sessionCookieCount: cookies.length, persistentCookieNames: contextCookies.map(cookie => cookie.name).filter(name => /c_user|xs|checkpoint|fr/i.test(name)), articleCount, loginFormCount, bodyPreview, articleSamples, globalPostLinks, networkSamples, finalUrl: page.url(), title: await page.title(), extractionRule: 'posts-tab-with-metrics-and-dialog-dismissal' };
   }, 'facebook');
 }
 
